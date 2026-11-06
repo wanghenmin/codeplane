@@ -1,0 +1,11 @@
+\begin{abstract}
+Part 1 asks for five stopping-reason labels on 1,171 terminated trials, only 157 of them labeled.
+K-means diagnostics show weak cluster structure in the reason embeddings (silhouette 0.16--0.31, adjusted Rand index with the true label-sets at most 0.20).
+We compared nine labeling approaches, from cluster voting to a semi-supervised GMM, self-training and label spreading.
+The selected model averages a supervised logistic regression (LR) with two pseudo-label models and raises validation sample-F1 from 0.865 to 0.897 and macro-F1 from 0.707 to 0.806.
+Most of the macro-F1 gain comes from Funding, which has 8 labeled positives.
+Part 2 predicts whether a trial met its primary endpoint in each phase.
+The starter model's log loss of 0.940 is worse than predicting each phase's success rate, because its probabilities are poorly calibrated.
+One regularized LR on field-wise TF-IDF features, shared across phases by feature augmentation, lowers mean validation log loss to 0.567 and raises ROC-AUC from 0.690 to 0.761.
+A split by start year suggests that temporal drift costs about 0.07 AUC and leaves log loss almost unchanged.
+\end{abstract}

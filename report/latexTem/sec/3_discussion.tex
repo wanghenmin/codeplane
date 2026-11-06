@@ -1,0 +1,91 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Part 1}
+
+\paragraph{Reasons do not form clusters.}
+Low silhouette, no peak and an ARI of at most 0.20 mean that K-means clusters only partly match the reasons, and \cref{fig:pca} suggests the only split available is Recruitment against the rest.
+Methods that rely on cluster structure alone do worst: B0, D and G reach validation macro-F1 of 0.684, 0.617 and 0.482, all below the supervised LR.
+The 8 labeled Funding trials sit in clusters dominated by Recruitment, so no smoothed cluster vector gives Funding a share of 0.5.
+Because sample-F1 is dominated by Recruitment, the one class clustering roughly separates, these methods lose little sample-F1 but a lot of macro-F1.
+Our reading is that sentence embeddings capture wording: ``stopped for safety concerns'' and ``stopped for lack of efficacy'' are phrased alike, while recruitment problems are described in many ways.
+
+\paragraph{Pseudo-labels help only after filtering.}
+Unfiltered B (0.816 validation, 0.858 CV) is below A (0.859, 0.896).
+The 1,326 unlabeled trials outnumber labeled ones 8 to 1, so noisy pseudo-labels dominate the loss even at weight 0.3.
+C and F filter by agreement or confidence and both beat A on validation.
+The trials they keep lie far from the decision boundary and cover regions the 157 early labeled trials miss, which acts mostly as regularization.
+F matches C without clustering, so the gain comes from filtering; clustering contributes to C as a second, independent opinion, not as a description of reason structure.
+
+\paragraph{The semi-supervised GMM converges but is confidently wrong.}
+EM converges and 91.1\% of posteriors exceed 0.95, yet the model trails the supervised LR, and in CV its score falls monotonically with $\lambda$ for every $d$ (0.886, 0.865, 0.829 for $d=40$).
+Nigam~\etal~\cite{nigam2000text} showed that with a misspecified generative model, EM moves the parameters toward higher likelihood and worse classification.
+Our model assumes one Gaussian per label-set with a shared covariance, but Recruitment is broad and the minority classes are compact (\cref{fig:pca}), and the Funding-only component has 4 trials to estimate its mean.
+A high posterior then measures the model's certainty, not its accuracy, which is why a stricter threshold barely helps.
+
+\paragraph{Validation and CV disagree.}
+H is best on validation but trails A in CV: 0.890 vs.\ 0.896 sample-F1 (within noise) and 0.771 vs.\ 0.798 macro-F1.
+We keep H because the project selects on validation, and because its gain is on rare classes: its Funding F1 of 0.750 is the best of all 40 configurations and its Other F1 of 0.600 is above A's 0.455.
+Averaging three differently biased models reduces the variance of rare-class predictions.
+CV folds also train on about 188 trials, fewer than the final 235, which makes the pseudo-label filters less stable.
+Still, 78 validation trials cannot separate A, C and H statistically.
+
+\paragraph{Feature selection.}
+The extra features describe trial design, while the stopping-reason text is already in the embedding.
+With 157 labels, 29--110 extra dimensions mostly add variance; the best gain (0.013) is one validation trial, and adding everything is worse than text alone, so the groups add noise without complementary signal.
+We excluded \texttt{start\_year} for another reason: labeled trials are early and test trials late, and the project notes that Recruitment is more common early and Safety later, so a year feature would teach a rule that fails on the test set.
+The predicted shift toward Safety and away from Recruitment on the test set, obtained without the year, points in the expected direction.
+Funding is predicted less often than in the labeled set (0.032 vs.\ 0.051 on test), consistent with the 40 extra labeled trials having been chosen for rare reasons.
+
+\subsection{Part 2}
+
+\paragraph{Calibration, not ranking, was the baseline's problem.}
+Predicting each phase's success rate gives a log loss of about 0.67.
+With 20,000 features, 1,012--3,950 rows per phase and $C=1$, the training data are nearly separable and the baseline's probabilities are pushed toward 0 and 1.
+Changing $C$ to 0.01 alone lowers log loss to 0.592, while AUC only moves from 0.690 to 0.737.
+
+\paragraph{The metric decides which models look good.}
+MNB on counts has ordinary AUC (0.714) and F1 (0.701) but a log loss of 3.65.
+We attribute this to the independence assumption: correlated words in \texttt{criteria} are counted as independent evidence and push posteriors to the extremes.
+On TF-IDF its log loss falls to 0.65--0.72, and a larger $\alpha$ lowers it further at a small AUC cost.
+kNN probabilities are bounded vote shares, so its log loss stays moderate, but its ranking trails LR.
+TF-IDF with bigrams beats unigrams, which beat bag of words.
+
+\paragraph{Pooling helps phases II and III.}
+Against per-phase field-wise LRs, the pooled model raises AUC by 0.012 in phase II and 0.013 in phase III and lowers it by 0.005 in phase I, the phase with the least data.
+We suspect phase I endpoints, mostly about safety and dosing, differ from the efficacy endpoints of later phases, while phases II and III define success similarly.
+The gain therefore seems to come from transfer between similar phases, not from sample size.
+
+\paragraph{Domain-knowledge features add nothing.}
+Pathways, targets, fingerprints and \texttt{start\_year} each change log loss by less than 0.003 and lower AUC slightly.
+Only 45.7\% of train rows have a matched drug, since biologics are mostly unmatched.
+Drug biology also says little about design choices such as the endpoint, eligibility and power, and drug names are already in the text.
+As in Part 1, features describing the trial design add little information.
+The best ensemble improves log loss by only 0.0026, which 1,013 validation rows cannot resolve, so we kept the single model.
+
+\paragraph{Error rates by reason group.}
+Two limits apply.
+Small groups are noisy: with $n=4$ one trial moves the rate by 0.25, so the Funding drop to 0 means nothing, and we interpret only groups with $n\ge 10$.
+Most reasons are also Part 1 predictions (only 12 of 88 phase II Recruitment trials are true labels), and their reliability differs by class: Part 1 validation F1 is 0.99 for Recruitment but 0.75 for Funding and 0.60 for Other, so the smallest groups are also the least reliably assigned.
+Among larger groups, the no-recorded-reason trials ran to completion and read like successful ones; the baseline's FPR on them in phase I is 0.571.
+The clearest gain is phase II Recruitment (0.352 to 0.239, $n=88$).
+One possible explanation, which we did not test, is that trials that later struggle to recruit have narrow eligibility criteria that bigram features can detect.
+Phase III Safety and Efficacy stay at 0.57--0.78 under both models, but with $n<10$ this is only a tendency; confirmatory trials may fail because of how the drug performs, which the text does not show.
+
+\paragraph{Higher FPR in phase III.}
+The phase III FPR rises from 0.496 to 0.569 while every other metric improves.
+With a success rate of 0.653, the better calibrated model predicts success more often, which raises recall on successes and FPR on failures.
+A threshold of 0.6--0.7 suits screening out likely failures; 0.5 suits calibrated probabilities as scored on Kaggle.
+Class weighting only moves the boundary and worsens calibration, since the classes are already close to balanced (0.477--0.653), and the best shrinkage of $s=1$ suggests the regularized LR is already well calibrated.
+
+\paragraph{From validation to test.}
+The temporal split lowers AUC by about 0.07 for both models, so we expect test AUC around 0.07 below validation, from new drugs, therapies, wording and indications.
+The pooled LR keeps its log loss because later trials succeed more often and the phase intercepts partly absorb this, offsetting the weaker ranking.
+The baseline's extreme probabilities turn into more costly mistakes.
+Test trials (2013--2022) are further from the training years than this proxy, so the real drop may be larger.
+
+\paragraph{Limitations.}
+HINT labels remain somewhat noisy after the 7 staff corrections, and we did not quantify the effect.
+In Part 1, 16.0\% of test predictions have several labels against 6.4\% in the labeled set, and a higher threshold for a second label could correct this.
+We did not try DBSCAN or a Part 1 kNN classifier.
+MNB was not used in Part 1 because the embeddings contain negative values.

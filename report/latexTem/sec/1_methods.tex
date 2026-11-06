@@ -1,0 +1,106 @@
+\section{Methods}
+\label{sec:methods}
+
+\subsection{Data and constraints}
+
+Both parts come from the HINT benchmark~\cite{fu2022hint} and ClinicalTrials.gov~\cite{ctgov}.
+In Part 1, the 312 latest trials (2010--2016) form the test set and the remaining 1,249 are split at random into train (1,171) and validation (78).
+Only 157 train trials are labeled: the earliest 117 plus 40 chosen for rare reasons.
+Recruitment covers 64.3\% of them and Funding 5.1\% (8 positives); 147 have exactly one reason.
+The input is a 150-dimensional reason embedding (a PCA-reduced, randomly rotated sentence embedding).
+In Part 2 each row is one trial in one phase.
+Train (8,037 rows) and validation (1,013) hold trials that started in 2013 or earlier, split by trial; the 1,500 test rows come from 2013--2022.
+Train success rates are 0.566, 0.477 and 0.653 for phases I, II and III.
+
+Reason embeddings and labels are used in Part 2 only for the error analysis, never as classifier inputs.
+Trial IDs are used only to match the two parts, and no deep learning is used.
+The Part 1 semi-supervised methods include the unlabeled test embeddings in the unlabeled pool, which makes the setting transductive; no test labels are used.
+Validation trials and CV hold-out folds are never in the pool.
+
+\subsection{Part 1: recovering reason labels}
+
+\paragraph{Shared components.}
+Embeddings are standardized with train-file statistics.
+The unlabeled pool $X_U$ holds the 1,014 masked train trials and the 312 test trials.
+Each reason gets an L2-regularized LR with \texttt{class\_weight="balanced"}.
+Pseudo-labels are down-weighted by \texttt{sample\_weight}; scikit-learn multiplies the two weights, so a rare-class pseudo-label ends up with more weight than $w_u$.
+Every trial has at least one reason and an empty prediction scores 0, so all methods keep labels with probability $\ge 0.5$ and fall back to the most probable label when none passes.
+
+\paragraph{Evaluation.}
+Changing the prediction for one of the 78 validation trials moves sample-F1 by about 1.3 points, so we also report 2$\times$5-fold cross-validation (CV) on the 235 labeled trials (157 train plus 78 validation), with hold-out labels hidden.
+
+\paragraph{Cluster diagnostics.}
+All 1,561 trials are L2-normalized and reduced to 50 principal components.
+K-means is run for $K$ from 2 to 80, recording inertia, silhouette, the label-set purity of labeled trials, and the adjusted Rand index (ARI)~\cite{hubert1985comparing} between clusters and label-sets.
+
+\paragraph{Labeling methods.}
+Nine families, tuned on validation and CV:
+
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{A, supervised LR} on the 157 labeled trials, $C\in\{0.01,0.1,1,10\}$.
+\item \textbf{B0 / B, K-means cluster-then-label.}
+K-means on L2-normalized PCA-50 features, centroids initialized with k-means++~\cite{arthur2007kmeans}, 10 restarts keeping the lowest inertia.
+Cluster label vectors are smoothed toward the labeled prior $\bar y$: $\hat y_k=(\sum_{i\in L,c_i=k}y_i+\bar y)/(n_k+1)$.
+B0 predicts $\hat y_k$; B uses it as a pseudo-label with weight $w_u\in\{0.3,1\}$ and retrains LR. $K\in\{10,20,40,80\}$.
+\item \textbf{C, K-means $\cap$ LR agreement.}
+Unlabeled trials where cluster voting and the supervised LR agree on all five labels get the LR labels as pseudo-labels ($w_u=1$).
+As in co-training, the two models make different kinds of errors. $K\in\{10,20,40\}$.
+\item \textbf{D, GMM soft labels.}
+Diagonal-covariance GMM on PCA-20, \texttt{reg\_covar=1e-3}, 3 restarts, components initialized from K-means (scikit-learn default).
+Each unlabeled trial gets a posterior-weighted soft label $p$ and enters LR as a $y=1$ row with weight $w_u p$ and a $y=0$ row with weight $w_u(1-p)$, $w_u=0.5$.
+\item \textbf{E0 / E, semi-supervised GMM} following Nigam~\etal~\cite{nigam2000text}.
+One Gaussian component per label-set observed in the labeled data: 7 label-sets, so $K=7$ (Funding's 8 positives fall into three of them).
+Components share one covariance with a ridge of $10^{-2}I$, since 157 trials cannot support per-component covariances.
+EM runs in a $d$-dimensional PCA space.
+\emph{Initialization:} the first M-step uses the labeled one-hot responsibilities only, with no random or K-means start; labeled responsibilities stay fixed.
+\emph{E-step:} $r_{ik}\propto\pi_k\mathcal N(z_i\mid\mu_k,\Sigma)$ for unlabeled trials.
+\emph{M-step:} unlabeled responsibilities are weighted by $\lambda$, so $\lambda=0$ is a purely supervised generative classifier.
+\emph{Convergence:} relative change in unlabeled log-likelihood below $10^{-5}$, at most 100 iterations.
+Predictions are $P(y_j=1\mid z)=\sum_k p(k\mid z)\,c_{kj}$, with $c_k$ the label-set of component $k$.
+E0 uses this posterior directly ($d\in\{10,20,40\}$, $\lambda\in\{0,0.3,1\}$).
+E keeps unlabeled trials with maximum posterior above 0.8 or 0.95 and uses their MAP label-set as a pseudo-label ($w_u=0.3$).
+\item \textbf{F, self-training LR.} Up to 5 rounds; a trial joins when all five probabilities satisfy $|2p_j-1|\ge 0.8$ or $0.95$.
+\item \textbf{G, label spreading}~\cite{zhou2004learning} on a kNN graph ($k\in\{10,20\}$, $\alpha=0.5$), per reason.
+\item \textbf{H, ensemble:} the mean probability of A ($C=0.1$), C ($K=20$) and E ($d=20$, threshold 0.95), one discriminative model and two pseudo-label models of different kinds.
+\end{itemize}
+
+\paragraph{Features.}
+On the supervised LR we added, one at a time, \texttt{start\_year}; TF-IDF of \texttt{criteria}, \texttt{diseases\_cleaned} and \texttt{drugs} reduced to 50 dimensions by SVD; a matched-drug flag with multi-hot drug actions; multi-hot level-0 Reactome pathways~\cite{gillespie2022reactome}; and all of these.
+\texttt{pathway\_level} describes the pathway, not the drug, so it was used only to select top-level pathways.
+The chosen model is refit on all 235 labeled trials.
+
+\subsection{Part 2: predicting trial outcomes}
+
+\paragraph{Baseline.}
+One LR per phase on a binary bag of words over the four text fields ($C=1$, up to 20,000 features).
+
+\paragraph{Representations and classifiers.}
+Bag of words, TF-IDF on unigrams, and TF-IDF on 1--2-grams, each with LR ($C$ from 0.01 to 10), Multinomial NB on counts or TF-IDF ($\alpha$ from 0.1 to 10), or distance-weighted cosine kNN ($k\in\{25,75,150\}$).
+
+\paragraph{Field-wise TF-IDF.}
+In one concatenated string, the long \texttt{criteria} field outweighs \texttt{drugs} and \texttt{icdcodes}.
+We fit one TF-IDF per field and concatenate them with fixed weights (1.0 for \texttt{criteria}, 0.5 for the others).
+Each ICD code is preceded by its three-character category (\texttt{E11.65} becomes \texttt{E11 E11.65})~\cite{who_icd10}, so related codes share a feature.
+Optional blocks add drug-knowledge tokens (targets and actions prefixed with \texttt{TGT\_} and \texttt{ACT\_}) and RDKit~\cite{rdkit} Morgan fingerprints~\cite{rogers2010ecfp} (radius 2, 1,024 bits, bitwise maximum over a trial's drugs, rows scaled by the square root of the number of set bits).
+
+\paragraph{Pooled LR.}
+The project allows a model that uses the phase.
+We use the feature augmentation of Daum\'e III~\cite{daume2007frustratingly}, with each phase as a domain:
+\begin{equation}
+\phi(x,p)=\big[\,x,\ \mathbb 1_{p=\mathrm{I}}\,x,\ \mathbb 1_{p=\mathrm{II}}\,x,\ \mathbb 1_{p=\mathrm{III}}\,x,\ e_p\,\big].
+\end{equation}
+Phase $p$ has effective weights $w_0+w_p$ and its own intercept from $e_p$.
+L2 regularization shrinks $w_p$ toward 0, so phases share strength.
+One LR is fit on all rows, $C\in\{0.3,1,3\}$.
+We also averaged it with a per-phase TF-IDF LR, kNN or MNB.
+
+\paragraph{Error analysis.}
+Failed validation trials are matched by \texttt{trial\_id} to Part 1 IDs and take the true or predicted reasons; unmatched trials form a ``no recorded reason'' group, and a trial can count toward several reasons.
+Each phase is analyzed separately (we assert unique \texttt{trial\_id} within a phase).
+For each group we report its size, how many reasons are true or predicted labels, and the fraction predicted successful, which is the group's false positive rate (FPR).
+
+\paragraph{Trade-offs and drift.}
+We tested thresholds from 0.4 to 0.7, \texttt{class\_weight="balanced"}, shrinkage toward the phase success rate $\pi$, $p'=\pi+s(p-\pi)$ with $s\in\{1,0.9,0.8,0.7\}$, and clipping to $[0.02,0.98]$, which caps the cost of a confident mistake at $-\ln 0.02\approx 3.9$.
+As a proxy for the later test years, we train on trials from 2008 or earlier (6,326 rows) and evaluate on 2010 or later (2,290 rows).
+The final model is refit on train $\cup$ validation (9,050 rows).
+All models use scikit-learn~\cite{pedregosa2011scikit}, and every figure is produced by code in the submitted notebook.
